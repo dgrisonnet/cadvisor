@@ -54,7 +54,6 @@ func createManagerAndAddContainers(
 ) *manager {
 	container.ClearContainerHandlerFactories()
 	mif := &manager{
-		containers:   make(map[namespacedContainerName]*containerData),
 		quitChannels: make([]chan error, 0, 2),
 		memoryCache:  memoryCache,
 	}
@@ -69,15 +68,15 @@ func createManagerAndAddContainers(
 		if err != nil {
 			t.Fatal(err)
 		}
-		mif.containers[namespacedContainerName{
+		mif.containers.Store(namespacedContainerName{
 			Name: name,
-		}] = cont
+		}, cont)
 		// Add Docker containers under their namespace.
 		if strings.HasPrefix(name, "/docker") {
-			mif.containers[namespacedContainerName{
+			mif.containers.Store(namespacedContainerName{
 				Namespace: DockerNamespace,
 				Name:      strings.TrimPrefix(name, "/docker/"),
-			}] = cont
+			}, cont)
 		}
 		f(mockHandler)
 	}
@@ -93,7 +92,6 @@ func createManagerAndAddSubContainers(
 ) *manager {
 	container.ClearContainerHandlerFactories()
 	mif := &manager{
-		containers:   make(map[namespacedContainerName]*containerData),
 		quitChannels: make([]chan error, 0, 2),
 		memoryCache:  memoryCache,
 	}
@@ -132,15 +130,15 @@ func createManagerAndAddSubContainers(
 		if err != nil {
 			t.Fatal(err)
 		}
-		mif.containers[namespacedContainerName{
+		mif.containers.Store(namespacedContainerName{
 			Name: name,
-		}] = cont
+		}, cont)
 		// Add Docker containers under their namespace.
 		if strings.HasPrefix(name, "/docker") {
-			mif.containers[namespacedContainerName{
+			mif.containers.Store(namespacedContainerName{
 				Namespace: DockerNamespace,
 				Name:      strings.TrimPrefix(name, "/docker/"),
-			}] = cont
+			}, cont)
 		}
 		f(mockHandler)
 	}
@@ -384,7 +382,10 @@ func TestGetContainerInfoV2Failure(t *testing.T) {
 	assert.NoError(t, err) // Use up default GetSpec call, and replace below
 	handlerMap[failing].On("GetSpec").Return(info.ContainerSpec{}, mockErr)
 	handlerMap[failing].On("Exists").Return(true)
-	m.containers[namespacedContainerName{Name: failing}].infoLastUpdatedTime = time.Time{} // Force GetSpec.
+	// Force GetSpec by resetting infoLastUpdatedTime to zero.
+	if cont, ok := m.containers.Load(namespacedContainerName{Name: failing}); ok {
+		cont.infoLastUpdatedTime.Store(0)
+	}
 
 	infos, err := m.GetContainerInfoV2("/", options)
 	if err == nil {
