@@ -39,8 +39,9 @@ import (
 // mockHandler is a minimal container.ContainerHandler for exercising the
 // manager's query/seam surface without the full (pruned) mock packages.
 type mockHandler struct {
-	ref  info.ContainerReference
-	spec info.ContainerSpec
+	ref      info.ContainerReference
+	spec     info.ContainerSpec
+	children []info.ContainerReference
 }
 
 func (h *mockHandler) ContainerReference() (info.ContainerReference, error) { return h.ref, nil }
@@ -49,7 +50,7 @@ func (h *mockHandler) GetStats() (*info.ContainerStats, error) {
 	return &info.ContainerStats{Timestamp: time.Now()}, nil
 }
 func (h *mockHandler) ListContainers(container.ListType) ([]info.ContainerReference, error) {
-	return nil, nil
+	return h.children, nil
 }
 func (h *mockHandler) ListProcesses(container.ListType) ([]int, error) { return nil, nil }
 func (h *mockHandler) GetCgroupPath(string) (string, error)            { return "/", nil }
@@ -757,6 +758,7 @@ func (m *threadSafeEventHandler) AddEvent(e *info.Event) error {
 type mockContainerHandlerFactory struct {
 	canHandle bool
 	canAccept bool
+	children  map[string][]info.ContainerReference
 }
 
 func (f *mockContainerHandlerFactory) String() string { return "mock" }
@@ -770,9 +772,14 @@ func (f *mockContainerHandlerFactory) CanHandleAndAccept(name string) (bool, boo
 }
 
 func (f *mockContainerHandlerFactory) NewContainerHandler(name string, metadataEnvAllowList []string, inHostNamespace bool) (container.ContainerHandler, error) {
+	var ch []info.ContainerReference
+	if f.children != nil {
+		ch = f.children[name]
+	}
 	return &mockHandler{
-		ref:  info.ContainerReference{Name: name},
-		spec: info.ContainerSpec{HasCpu: true},
+		ref:      info.ContainerReference{Name: name},
+		spec:     info.ContainerSpec{HasCpu: true},
+		children: ch,
 	}, nil
 }
 
@@ -827,6 +834,56 @@ func TestGetContainerDiscoveryEnabled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown container") {
 		t.Errorf("error = %q, want it to contain 'unknown container'", err)
+	}
+}
+
+func TestGetRequestedContainersRecursiveDiscoveryDisabled(t *testing.T) {
+	container.ClearContainerHandlerFactories()
+	defer container.ClearContainerHandlerFactories()
+
+	podPath := "/kubepods/pod-abc"
+	child1 := "/kubepods/pod-abc/container-1"
+	child2 := "/kubepods/pod-abc/container-2"
+
+	container.RegisterContainerHandlerFactory(
+		&mockContainerHandlerFactory{
+			canHandle: true,
+			canAccept: true,
+			children: map[string][]info.ContainerReference{
+				podPath: {
+					{Name: child1},
+					{Name: child2},
+				},
+			},
+		},
+		[]watcher.ContainerWatchSource{watcher.Raw},
+	)
+
+	m := newTestManager()
+	m.disableContainerDiscovery = true
+
+	options := info.RequestOptions{
+		IdType:    info.TypeName,
+		Count:     1,
+		Recursive: true,
+	}
+
+	containers, err := m.getRequestedContainers(podPath, options)
+	if err != nil {
+		t.Fatalf("getRequestedContainers() returned unexpected error: %v", err)
+	}
+
+	if _, ok := containers[podPath]; !ok {
+		t.Errorf("missing parent container %q", podPath)
+	}
+	if _, ok := containers[child1]; !ok {
+		t.Errorf("missing child container %q", child1)
+	}
+	if _, ok := containers[child2]; !ok {
+		t.Errorf("missing child container %q", child2)
+	}
+	if len(containers) != 3 {
+		t.Errorf("got %d containers, want 3", len(containers))
 	}
 }
 

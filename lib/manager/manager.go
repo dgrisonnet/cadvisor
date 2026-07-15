@@ -678,6 +678,15 @@ func (m *manager) getRequestedContainers(containerName string, options info.Requ
 			containersMap[cont.info.Name] = cont
 		} else {
 			containersMap = m.getSubcontainers(containerName)
+			if len(containersMap) == 0 && m.disableContainerDiscovery {
+				if _, err := m.getContainer(containerName); err != nil {
+					return containersMap, err
+				}
+				if err := m.detectSubcontainers(containerName); err != nil {
+					return containersMap, err
+				}
+				containersMap = m.getSubcontainers(containerName)
+			}
 			if len(containersMap) == 0 {
 				return containersMap, fmt.Errorf("unknown container: %q", containerName)
 			}
